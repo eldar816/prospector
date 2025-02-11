@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM Building Mapper</title>
+    <script>
+        function loadData(category) {
+            fetch(`/get_data/${category}`)
+                .then(response => response.json())
+                .then(data => {
+                    const tableBody = document.querySelector("#data-table tbody");
+                    tableBody.innerHTML = "";
+                    data.forEach(row => {
+                        let tr = document.createElement("tr");
+                        tr.innerHTML = `<td>${row.address}</td><td>${row.building_class}</td><td>${row.ownername || 'N/A'}</td>`;
+                        tableBody.appendChild(tr);
+                    });
+                });
+
+            fetch(`/generate_map/${category}`)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById("map-frame").src = data.map_url;
+                });
+        }
+    </script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .button-group { margin-bottom: 20px; }
+        button { margin: 5px; padding: 10px; font-size: 16px; cursor: pointer; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>CRM Building Mapper</h1>
+    <div class="button-group">
+        <button onclick="loadData('condos')">Show Condos</button>
+        <button onclick="loadData('coops')">Show Co-ops</button>
+        <button onclick="loadData('commercial')">Show Commercial</button>
+    </div>
+    <iframe id="map-frame" src="/static/map_condos.html" width="100%" height="500px"></iframe>
+    <table id="data-table">
+        <thead>
+            <tr>
+                <th>Address</th>
+                <th>Building Type</th>
+                <th>Owner</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</body>
+</html>
