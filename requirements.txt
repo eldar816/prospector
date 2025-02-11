@@ -3,5 +3,3 @@ pandas
 folium
 streamlit-folium
 jsonschema  # json is built-in, but jsonschema might be useful for validation
-uuid  # Built-in, no need to include in requirements.txt
-re  # Built-in, no need to include in requirements.txt
