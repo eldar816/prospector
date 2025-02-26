@@ -77,6 +77,8 @@ def load_clean_data(file_paths, filters):
     df_list = []
 
     for file_path in file_paths:
+        building_type = next((key for key, value in files.items() if value == file_path), "Unknown")  # Assign building type
+
         try:
             with open(file_path, "r") as file:
                 content = file.read().strip()
@@ -102,7 +104,8 @@ def load_clean_data(file_paths, filters):
         df = df.dropna(subset=['LATITUDE', 'LONGITUDE'], how='all')
         df = df.drop_duplicates(subset=['ADDRESS'])
 
-        # Adjust filtering to match both numbers and names
+        df["BUILDING TYPE"] = building_type  # Add building type to the DataFrame
+
         for key, value in filters.items():
             if key == "BOROUGH" and value:
                 matching_boroughs = [b for b, name in borough_map.items() if name in value]
@@ -172,6 +175,19 @@ if st.session_state['data'] is None or st.session_state['data'].empty:
     st.warning("No valid data available. Displaying default map.")
     folium_static(folium.Map(location=[40.7128, -74.0060], zoom_start=12))
 
+# Define distinct colors for different building types
+building_type_colors = {
+    "Residential": ("#4CAF50", "green"),  # Green label and icon
+    "Miscellaneous": ("#9C27B0", "purple"),  # Purple label and icon
+    "Special": ("#FF5722", "orange"),  # Orange label and icon
+    "Vacant": ("#795548", "brown"),  # Brown label and icon
+    "Condos": ("#3F51B5", "blue"),  # Blue label and icon
+    "Commercial": ("#E91E63", "pink"),  # Pink label and icon
+    "Co-Ops": ("#009688", "teal"),  # Teal label and icon
+    "Mixed-Use": ("#FFC107", "cadetblue")  # Yellow label and cadetblue icon
+}
+
+# Display Search Results with updated colors
 if not st.session_state['data'].empty:
     st.title("CRM Map & Data")
     data = st.session_state['data']
@@ -180,9 +196,27 @@ if not st.session_state['data'].empty:
     m = folium.Map(location=[data['LATITUDE'].mean(), data['LONGITUDE'].mean()], zoom_start=12)
 
     for _, row in data.iterrows():
+        address = row.get('ADDRESS', 'No Address')
+        lat, lon = row['LATITUDE'], row['LONGITUDE']
+        building_type = row.get("BUILDING TYPE", "Unknown")
+
+        # Assign colors dynamically
+        label_color, icon_color = building_type_colors.get(building_type, ("#607D8B", "gray"))  # Default: Gray
+
+        google_maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+
+        popup_content = f"""
+        <div style="font-size:14px; padding:5px; width:280px;">
+            <strong>Address:</strong> <a href="{google_maps_url}" target="_blank">{address}</a><br>
+            <strong>Building Type:</strong> 
+            <span style="background:{label_color}; color:white; padding:3px 6px; border-radius:4px; font-weight:bold;">{building_type}</span>
+        </div>
+        """
+
         folium.Marker(
-            [row['LATITUDE'], row['LONGITUDE']],
-            popup=f"{row.get('BOROUGH', 'Unknown')}: {row.get('ADDRESS', 'No Address')}"
+            [lat, lon],
+            popup=folium.Popup(popup_content, max_width=320),
+            icon=folium.Icon(color=icon_color, icon="info-sign")
         ).add_to(m)
 
     folium_static(m)
