@@ -170,6 +170,7 @@ if st.sidebar.button("Search"):
 if st.session_state['data'] is None or st.session_state['data'].empty:
     st.session_state['data'] = pd.DataFrame(columns=['LATITUDE', 'LONGITUDE'])
     st.warning("No valid data available. Displaying default map.")
+    folium_static(folium.Map(location=[40.7128, -74.0060], zoom_start=12))
 
 if not st.session_state['data'].empty:
     st.title("CRM Map & Data")
