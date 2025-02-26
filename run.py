@@ -3,123 +3,185 @@ import pandas as pd
 import folium
 from streamlit_folium import folium_static
 import json
-import uuid
-import re
+import os
 
-# Function to load and clean data
-def load_clean_data(file_path, zip_filter=None):
-    try:
-        with open(file_path, "r") as file:
-            content = file.read().strip()
-            
-            # Ensure the JSON content is wrapped in an array
-            if not content.startswith("["):
-                content = f"[{content.replace('}\n{', '},{')}]"
-            
-            data = json.loads(content)
-            
-        df = pd.DataFrame(data)
-    except json.JSONDecodeError as e:
-        st.error(f"Error decoding JSON: {e}")
-        return pd.DataFrame()
-    
-    # Standardize column names by stripping spaces and converting to uppercase
-    df.columns = df.columns.str.strip().str.upper()
-    
-    # Ensure required columns exist
-    required_columns = ['ADDRESS', 'BOROUGH', 'ZIP CODE', 'LATITUDE', 'LONGITUDE']
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        st.warning(f"Dataset {file_path} is missing columns: {', '.join(missing_columns)}")
-        return pd.DataFrame()  # Return empty DataFrame if required columns are missing
-    
-    # Convert numeric columns properly
-    for col in ['LATITUDE', 'LONGITUDE', 'ZIP CODE', 'SALE PRICE', 'YEAR BUILT']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Drop rows where lat/lon is missing
-    df = df.dropna(subset=['LATITUDE', 'LONGITUDE'], how='all')
-    
-    # Remove duplicate addresses to prevent multiple markers per address
-    df = df.drop_duplicates(subset=['ADDRESS'])
-    
-    # Apply ZIP code filter if provided
-    if zip_filter and zip_filter != "0":
-        zip_codes = set()
-        zip_pattern = re.compile(r'\b(\d{5})-(\d{5})\b|\b(\d{5})\b')
-        matches = zip_pattern.findall(zip_filter)
-        
-        for match in matches:
-            if match[0] and match[1]:  # Range of ZIP codes
-                start, end = map(int, [match[0], match[1]])
-                zip_codes.update(range(start, end + 1))
-            elif match[2]:  # Single ZIP code
-                zip_codes.add(int(match[2]))
-        
-        df = df[df['ZIP CODE'].isin(zip_codes)]
-    
-    return df
-
-# Session state setup
-if 'data' not in st.session_state:
-    st.session_state['data'] = None
-if 'notes' not in st.session_state:
-    st.session_state['notes'] = {}
-if 'contacted' not in st.session_state:
-    st.session_state['contacted'] = {}
-
-# File paths
+# File paths (Ensuring all datasets remain available)
 files = {
-    # Non existant in github version
-    # "All":"data/all_filtered_data.json",
     "Residential": "data/Residential.json",
     "Miscellaneous": "data/Miscellaneous.json",
     "Special": "data/Special.json",
     "Vacant": "data/Vacant.json",
     "Condos": "data/Condos.json",
     "Commercial": "data/Commercial.json",
-    "Co-Ops": "data/Coops.json"
+    "Co-Ops": "data/Coops.json",
+    "Mixed-Use": "data/Mixed-Use.json",
 }
 
-# Sidebar selection
-st.sidebar.title("Load Dataset")
-for label, file_path in files.items():
-    zip_filter = st.sidebar.text_input(f"Filter {label} by ZIP Code (e.g., 10001, 10005, 10007-10011, or 0 for all)")
-    if st.sidebar.button(f"Load {label}"):
-        st.session_state['data'] = load_clean_data(file_path, zip_filter)
-        st.session_state['current_file'] = label
+borough_neighborhoods_file = "borough_neighborhoods.json"
 
-# Display Map
-if st.session_state['data'] is not None and not st.session_state['data'].empty:
-    st.title(f"{st.session_state['current_file']} Map & CRM")
+# Borough number-to-name mapping
+borough_map = {
+    "1": "Manhattan",
+    "2": "Bronx",
+    "3": "Brooklyn",
+    "4": "Queens",
+    "5": "Staten Island"
+}
+
+# Function to extract borough-neighborhood mapping and save to JSON
+def extract_borough_neighborhoods(file_paths):
+    borough_neighborhoods = {}
+
+    for file_path in file_paths:
+        try:
+            with open(file_path, "r") as file:
+                content = file.read().strip()
+                if not content.startswith("["):
+                    content = content.replace('}\n{', '},{')
+                    content = f'[{content}]'
+                data = json.loads(content)
+                df = pd.DataFrame(data)
+        except json.JSONDecodeError as e:
+            st.error(f"Error decoding JSON in {file_path}: {e}")
+            continue
+
+        if "BOROUGH" in df.columns and "NEIGHBORHOOD" in df.columns:
+            df["BOROUGH"] = df["BOROUGH"].astype(str).str.strip()
+
+            # Convert borough numbers to names but store both for lookup
+            df["BOROUGH"] = df["BOROUGH"].replace(borough_map)
+
+            df["NEIGHBORHOOD"] = df["NEIGHBORHOOD"].astype(str).str.strip().str.title()
+
+            for borough, neighborhood in zip(df["BOROUGH"], df["NEIGHBORHOOD"]):
+                if borough not in borough_neighborhoods:
+                    borough_neighborhoods[borough] = set()
+                borough_neighborhoods[borough].add(neighborhood)
+
+    borough_neighborhoods = {borough: sorted(list(neighborhoods)) for borough, neighborhoods in borough_neighborhoods.items()}
+
+    with open(borough_neighborhoods_file, "w") as f:
+        json.dump(borough_neighborhoods, f, indent=4)
+
+    return borough_neighborhoods
+
+# Load or generate borough-neighborhood data
+if not os.path.exists(borough_neighborhoods_file):
+    borough_neighborhoods = extract_borough_neighborhoods(files.values())
+else:
+    with open(borough_neighborhoods_file, "r") as f:
+        borough_neighborhoods = json.load(f)
+
+# Function to load and clean data
+def load_clean_data(file_paths, filters):
+    df_list = []
+
+    for file_path in file_paths:
+        try:
+            with open(file_path, "r") as file:
+                content = file.read().strip()
+                if not content.startswith("["):
+                    content = content.replace('}\n{', '},{')
+                    content = f'[{content}]'
+                data = json.loads(content)
+                df = pd.DataFrame(data)
+        except json.JSONDecodeError as e:
+            st.error(f"Error decoding JSON in {file_path}: {e}")
+            continue
+
+        df.columns = df.columns.str.strip().str.upper()
+
+        if "BOROUGH" in df.columns:
+            df["BOROUGH"] = df["BOROUGH"].astype(str).str.strip()
+            df["BOROUGH"] = df["BOROUGH"].replace(borough_map)
+
+        for col in ['LATITUDE', 'LONGITUDE', 'ZIP CODE', 'SALE PRICE', 'YEAR BUILT']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        df = df.dropna(subset=['LATITUDE', 'LONGITUDE'], how='all')
+        df = df.drop_duplicates(subset=['ADDRESS'])
+
+        # Adjust filtering to match both numbers and names
+        for key, value in filters.items():
+            if key == "BOROUGH" and value:
+                matching_boroughs = [b for b, name in borough_map.items() if name in value]
+                matching_boroughs += value  # Include both name and number
+                df = df[df["BOROUGH"].astype(str).isin(matching_boroughs)]
+            elif value:
+                df = df[df[key].astype(str).str.contains(value, case=False, na=False)]
+
+        df_list.append(df)
+
+    return pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
+
+# Session state setup
+if 'data' not in st.session_state:
+    st.session_state['data'] = None
+
+# Sidebar UI
+st.sidebar.title("Search")
+
+# Building Type Selection
+selected_files = st.sidebar.multiselect("Select Building Type", list(files.keys()))
+
+# **Fix: Ensure boroughs are properly formatted**
+valid_boroughs = sorted(set(borough_map.values()))
+
+borough_filter = st.sidebar.multiselect("Select Borough(s)", options=valid_boroughs)
+
+# **Fix: Ensure neighborhoods are retrieved correctly**
+selected_neighborhoods = []
+if borough_filter:
+    st.sidebar.markdown("### Neighborhoods by Borough:")
+    
+    for borough in borough_filter:
+        matching_boroughs = [code for code, name in borough_map.items() if name == borough] + [borough]
+        neighborhoods = set()
+
+        # Collect neighborhoods from all matching borough names/numbers
+        for b in matching_boroughs:
+            if b in borough_neighborhoods:
+                neighborhoods.update(borough_neighborhoods[b])
+
+        neighborhoods = sorted(neighborhoods)
+
+        if neighborhoods:
+            selected = st.sidebar.multiselect(f"{borough} Neighborhoods", options=neighborhoods)
+            selected_neighborhoods.extend(selected)
+
+# Address & ZIP Code Filters
+address_filter = st.sidebar.text_input("Search by Address", key="address_filter")
+zip_filter = st.sidebar.text_input("Filter by ZIP Code (e.g., 10001, 10002, 10003-10010)", key="zip_filter")
+
+# -- SEARCH BUTTON --
+if st.sidebar.button("Search"):
+    filters = {
+        'BOROUGH': borough_filter,  # Boroughs now match both names and numbers
+        'NEIGHBORHOOD': '|'.join(selected_neighborhoods) if selected_neighborhoods else None,
+        'ADDRESS': address_filter,
+        'ZIP CODE': zip_filter
+    }
+
+    file_paths = [files[label] for label in selected_files] if selected_files else files.values()
+    st.session_state['data'] = load_clean_data(file_paths, filters)
+
+# Display Search Results
+if st.session_state['data'] is None or st.session_state['data'].empty:
+    st.session_state['data'] = pd.DataFrame(columns=['LATITUDE', 'LONGITUDE'])
+    st.warning("No valid data available. Displaying default map.")
+
+if not st.session_state['data'].empty:
+    st.title("CRM Map & Data")
     data = st.session_state['data']
-    
+
     st.subheader("Interactive Map")
-    
-    # Create map
     m = folium.Map(location=[data['LATITUDE'].mean(), data['LONGITUDE'].mean()], zoom_start=12)
-    
+
     for _, row in data.iterrows():
         folium.Marker(
             [row['LATITUDE'], row['LONGITUDE']],
             popup=f"{row.get('BOROUGH', 'Unknown')}: {row.get('ADDRESS', 'No Address')}"
         ).add_to(m)
-    
+
     folium_static(m)
-    
-    # CRM Section
-    st.subheader("CRM Notes & Contact Tracking")
-    for i, row in data.iterrows():
-        unique_id = f"{row.get('BOROUGH', 'Unknown')}-{row.get('ADDRESS', 'No Address')}-{i}"
-        name = row.get('BOROUGH', 'Unknown')
-        address = row.get('ADDRESS', 'No Address')
-        
-        st.markdown(f"### {name} - {address}")
-        note = st.text_area(f"Notes for {name}", value=st.session_state['notes'].get(unique_id, ""), key=unique_id)
-        if st.checkbox(f"Mark as Contacted {name}", value=st.session_state['contacted'].get(unique_id, False), key=f"contact_{unique_id}"):
-            st.session_state['contacted'][unique_id] = True
-        
-        st.session_state['notes'][unique_id] = note
-else:
-    st.warning("No valid data available. Please check the dataset.")
